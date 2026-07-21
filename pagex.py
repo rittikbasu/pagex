@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Callable, Mapping
 from datetime import datetime, timezone
 import argparse
+import base64
+import binascii
 import fcntl
 import os
 import pwd
@@ -79,6 +81,11 @@ TAG_ATTRIBUTES = {
 }
 SAFE_META_NAMES = {"color-scheme", "description", "robots", "theme-color", "viewport"}
 SAFE_DATA_IMAGE = re.compile(r"data:image/(?:gif|jpeg|png|webp);base64,[A-Za-z0-9+/=]+", re.IGNORECASE)
+SAFE_DATA_FONT = re.compile(
+    r"url\(\s*(?P<quote>['\"]?)data:font/woff2;base64,"
+    r"(?P<payload>[A-Za-z0-9+/]+={0,2})(?P=quote)\s*\)",
+    re.IGNORECASE,
+)
 SECRET_PATTERNS = (
     re.compile(r"-----BEGIN (?:[A-Z0-9]+ )?PRIVATE KEY-----"),
     re.compile(r"\b(?:ghp_|github_pat_|glpat-|hf_|npm_|xox[baprs]-)[A-Za-z0-9_-]{16,}\b"),
@@ -109,6 +116,19 @@ class UploadUncertain(PublishFailed):
 
 class PagexConfigError(ValueError):
     pass
+
+
+def _mask_embedded_woff2(css: str) -> str:
+    def validate(match: re.Match[str]) -> str:
+        try:
+            font = base64.b64decode(match.group("payload"), validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise PageRejected("embedded WOFF2 font is not valid base64") from error
+        if not font.startswith(b"wOF2"):
+            raise PageRejected("embedded font must use WOFF2 data")
+        return "embedded-woff2"
+
+    return SAFE_DATA_FONT.sub(validate, css)
 
 
 @dataclass(frozen=True)
@@ -370,12 +390,12 @@ def inspect_html(data: bytes) -> PageInspection:
         raise PageRejected("page must contain html, head and body elements")
     if parser.violations:
         raise PageRejected(parser.violations[0])
-    css = "\n".join(parser.css_parts)
+    css = _mask_embedded_woff2("\n".join(parser.css_parts))
     if (
         "\\" in css
         or re.search(r"(?i)(?:https?|data|file|ftp):|//|(?:-webkit-)?image-set\s*\(", css)
         or re.search(
-            r"@(?:font-face|import)\b|\burl\s*\(|\bexpression\s*\(|"
+            r"@import\b|\burl\s*\(|\bexpression\s*\(|"
             r"(?:^|[;{])\s*(?:behavior|-moz-binding)\s*:",
             css,
             re.IGNORECASE,

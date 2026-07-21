@@ -124,6 +124,10 @@ hermes skills install \
 
 once pagex is configured and private publishing is authorized, the skill lets Hermes Agent choose a page when it is a better delivery format. this is especially useful for long answers delivered through telegram or another messaging surface.
 
+the skill is also the canonical pagex design system. it embeds cormorant garamond for headings, newsreader for body prose and a restrained warm editorial palette. the bundled ofl-licensed woff2 fonts remain inside each html file, so pages make no font requests to google or another runtime service.
+
+to change the design durably, fork or edit the source skill. installed copies can be replaced by upstream updates.
+
 the cli remains agent-agnostic. any agent or script that can write one html file can use pagex.
 
 ## accepted pages
@@ -132,11 +136,12 @@ pagex accepts a strict self-contained, javascript-free editorial subset:
 
 - semantic prose, tables, figures, details and common static inline svg;
 - embedded css;
+- embedded base64 woff2 fonts;
 - embedded raster data images;
 - safe `http`, `https`, `mailto` and fragment links;
 - files up to 2 mib.
 
-it rejects scripts, comments, declarations, processing instructions, event handlers, forms, iframes, media embeds, executable urls, external runtime assets, css resource loading and high-confidence credential patterns.
+it rejects scripts, comments, declarations, processing instructions, event handlers, forms, iframes, media embeds, executable urls, external runtime assets, external css or font urls and high-confidence credential patterns.
 
 the credential scan reduces accidental leakage; it does not prove a page is safe.
 

@@ -1,0 +1,23 @@
+[
+  {
+    "family": "Cormorant Garamond",
+    "style": "normal",
+    "file": "cormorant-garamond-latin.woff2.b64",
+    "bytes": 37640,
+    "sha256": "d80df8ff5aecd299a61549f9e29ab1ed0b9b05f4ea71d50fe978e07d5240b235"
+  },
+  {
+    "family": "Newsreader",
+    "style": "normal",
+    "file": "newsreader-latin.woff2.b64",
+    "bytes": 58084,
+    "sha256": "62981321d9a3cc7a61a73792729043703fd6112da86e8ec848bb57f088578757"
+  },
+  {
+    "family": "Newsreader",
+    "style": "italic",
+    "file": "newsreader-italic-latin.woff2.b64",
+    "bytes": 24340,
+    "sha256": "fa9b900403949d9a723106752a5c8ad2797012a0c9057427b1da2db72d552148"
+  }
+]

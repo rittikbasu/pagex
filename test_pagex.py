@@ -1,3 +1,4 @@
+import base64
 import os
 import pwd
 import re
@@ -99,6 +100,22 @@ class InspectPageTests(unittest.TestCase):
             result = pagex.inspect_page(path)
             self.assertGreater(result.text_length, 0)
 
+    def test_accepts_embedded_woff2_font(self):
+        font = base64.b64encode(b"wOF2" + b"pagex-font-data").decode()
+        source = self.page(
+            "<main>typeset answer</main>",
+            "<style>"
+            "@font-face{font-family:'Pagex Test';"
+            f"src:url(data:font/woff2;base64,{font}) format('woff2');"
+            "font-display:swap;font-style:normal;font-weight:400}"
+            "body{font-family:'Pagex Test',serif}"
+            "</style>",
+        )
+
+        result = pagex.inspect_html(source.encode())
+
+        self.assertEqual(result.title, "test")
+
     def test_rejects_unsafe_single_object_pages(self):
         unsafe_pages = {
             "missing doctype": "<html><head><title>x</title></head><body>x</body></html>",
@@ -111,6 +128,15 @@ class InspectPageTests(unittest.TestCase):
             "embedded svg": self.page("<svg><use href='https://example.com/x.svg#x'/></svg>x"),
             "form": self.page("<form action='https://example.com'><button>x</button></form>"),
             "css import": self.page("x", "<style>@import url('https://example.com/x.css')</style>"),
+            "external font": self.page(
+                "x",
+                "<style>@font-face{font-family:x;src:url(https://example.com/x.woff2)}</style>",
+            ),
+            "fake woff2": self.page(
+                "x",
+                "<style>@font-face{font-family:x;"
+                "src:url(data:font/woff2;base64,bm90LWEtZm9udA==)}</style>",
+            ),
             "escaped css url": self.page("x", "<style>body{background:u\\72l(https://example.com/x.png)}</style>"),
             "comment": self.page("<!-- note --><main>x</main>"),
             "malformed comment": self.page("<!--><script>document.title='x'</script>--><main>x</main>"),
@@ -140,6 +166,28 @@ class InspectPageTests(unittest.TestCase):
                     path.write_text(self.page(f"<main>{value}</main>"), encoding="utf-8")
                     with self.assertRaisesRegex(pagex.PageRejected, "credential"):
                         pagex.inspect_page(path)
+
+
+class SkillDesignTests(unittest.TestCase):
+    def test_bundled_design_css_is_self_contained_and_accepted(self):
+        script = Path(__file__).parent / "skills/pagex/scripts/design_css.py"
+
+        result = subprocess.run(
+            [sys.executable, str(script)],
+            capture_output=True,
+            check=False,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("font-family: 'Cormorant Garamond'", result.stdout)
+        self.assertIn("font-family: 'Newsreader'", result.stdout)
+        source = InspectPageTests.page(
+            "<main><h1>designed answer</h1><p>readable body</p></main>",
+            f"<style>{result.stdout}</style>",
+        )
+        inspection = pagex.inspect_html(source.encode())
+        self.assertEqual(inspection.title, "test")
 
 
 class PageIdTests(unittest.TestCase):
