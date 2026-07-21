@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pagex"
+version = "0.1.0"
+description = "Private one-file publishing for AI answer pages"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = ["ai-agent", "cloudflare", "r2", "publishing", "html"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet :: WWW/HTTP",
+]
+dependencies = []
+
+[project.scripts]
+pagex = "pagex:main"
+
+[project.urls]
+Homepage = "https://github.com/rittikbasu/pagex"
+Issues = "https://github.com/rittikbasu/pagex/issues"
+
+[tool.setuptools]
+py-modules = ["pagex"]

@@ -1,0 +1,6 @@
+bucket = "your-pagex-bucket"
+base_url = "https://pages.example.com"
+
+# optional overrides
+# data_dir = "~/.local/share/pagex"
+# wrangler = "wrangler"
