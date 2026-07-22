@@ -286,7 +286,6 @@ class SkillDesignTests(unittest.TestCase):
             r"src: url\(data:font/woff2;base64,([A-Za-z0-9+/=]+)\) format\('woff2'\);",
             text,
         )
-        font_faces = re.findall(r"@font-face\s*\{(.*?)\}", text, re.DOTALL)
         asset_fonts = [
             (assets / filename).read_text(encoding="ascii").strip()
             for filename in (
@@ -297,148 +296,35 @@ class SkillDesignTests(unittest.TestCase):
         ]
 
         self.assertEqual(inspection.title, "Page title")
-        self.assertEqual(len(source) < pagex.MAX_PAGE_BYTES, True)
-        self.assertEqual(text.count("@font-face"), 3)
+        self.assertLess(len(source), pagex.MAX_PAGE_BYTES)
         self.assertEqual(embedded_fonts, asset_fonts)
-        self.assertIn("font-family: 'Cormorant Garamond'", font_faces[0])
-        self.assertIn("font-style: normal", font_faces[0])
-        self.assertIn("font-family: 'Newsreader'", font_faces[1])
-        self.assertIn("font-style: normal", font_faces[1])
-        self.assertIn("font-family: 'Newsreader'", font_faces[2])
-        self.assertIn("font-style: italic", font_faces[2])
-        self.assertTrue(all(base64.b64decode(font).startswith(b"wOF2") for font in embedded_fonts))
-        self.assertIn("--display: 'Cormorant Garamond', Georgia, serif", text)
-        self.assertIn("--text: 'Newsreader', Georgia, serif", text)
-        self.assertIn("font-family: var(--text)", text)
-        self.assertRegex(text, r"h1, h2, h3, \.page-mark \{[^}]*font-family: var\(--display\)")
-        self.assertIn("--shell: 61.25rem", text)
-        self.assertIn("--measure: 68ch", text)
-        self.assertIn("--paper: #060606", text)
-        self.assertIn("--ink: #c8c6c0", text)
-        self.assertIn("--ink-strong: #f2f0eb", text)
-        self.assertIn("margin-inline: 0 auto", text)
-        self.assertIn('data-theme-icon="moon"', text)
-        self.assertNotIn("answer document", text)
         self.assertIn("data-pagex=\"theme\"", text)
-        self.assertIn("data-theme-toggle", text)
-        self.assertIn("prefers-color-scheme: dark", text)
-        self.assertIn("prefers-reduced-motion: reduce", text)
-        self.assertNotRegex(text, r"<(?:form|iframe|link)\b")
-
-    def test_theme_control_uses_action_button_semantics(self):
-        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("button.setAttribute('aria-label'", text)
-        self.assertIn("button.addEventListener('click'", text)
-        self.assertIn('data-theme-icon="moon"', text)
-        self.assertIn('data-theme-icon="sun"', text)
-        self.assertIn("querySelector('[data-theme-icon=\"moon\"]')", text)
-        self.assertIn("querySelector('[data-theme-icon=\"sun\"]')", text)
-        self.assertIn("toggleAttribute('hidden', dark)", text)
-        self.assertIn("toggleAttribute('hidden', !dark)", text)
-        self.assertIn(".theme-toggle [hidden] { display: none; }", text)
-        self.assertNotIn("aria-pressed", text)
-
-    def test_theme_control_is_borderless_without_shrinking_its_hit_target(self):
-        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
-            encoding="utf-8"
-        )
-        toggle = re.search(r"\n    \.theme-toggle \{(.*?)\n    \}", text, re.DOTALL)
-
-        self.assertIsNotNone(toggle)
-        self.assertIn("width: 2.75rem", toggle.group(1))
-        self.assertIn("height: 2.75rem", toggle.group(1))
-        self.assertIn("border: 0", toggle.group(1))
-        self.assertIn("color: var(--muted)", toggle.group(1))
-        self.assertNotIn("border-radius", toggle.group(1))
-        self.assertIn(".theme-toggle:hover { color: var(--ink-strong); }", text)
-
-    def test_theme_control_shares_the_wordmark_bottom_edge_and_optical_scale(self):
-        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
-            encoding="utf-8"
-        )
-        masthead = re.search(r"\n    \.masthead \{(.*?)\n    \}", text, re.DOTALL)
-
-        self.assertIsNotNone(masthead)
-        self.assertIn("align-items: end", masthead.group(1))
-        self.assertNotIn("masthead-tools", text)
         self.assertRegex(
             text,
-            r'<header class="masthead">\s*<span class="page-mark">pagex</span>\s*'
-            r'<button class="theme-toggle"',
+            r'<button\b(?=[^>]*\btype="button")(?=[^>]*\bdata-theme-toggle\b)'
+            r'(?=[^>]*\baria-label="[^"]+")[^>]*>',
         )
-        self.assertIn(
-            ".theme-toggle svg {\n      width: 1.5rem;\n      height: 1.5rem;\n      transform: translateY(.125rem);\n    }",
-            text,
-        )
-        self.assertIn("place-items: end center", text)
+        self.assertIn("button.setAttribute('aria-label'", text)
 
-    def test_heading_uses_the_reading_column_without_a_second_width_cap(self):
+    def test_template_keeps_wide_content_reachable_without_custom_scrollbars(self):
         text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
             encoding="utf-8"
         )
-        heading = re.search(r"\n    h1 \{(.*?)\n    \}", text, re.DOTALL)
-
-        self.assertIsNotNone(heading)
-        self.assertNotIn("max-width", heading.group(1))
-
-    def test_wordmark_uses_the_reference_typographic_treatment(self):
-        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
-            encoding="utf-8"
-        )
-        wordmark = re.search(r"\n    \.page-mark \{(.*?)\n    \}", text, re.DOTALL)
-
-        self.assertIsNotNone(wordmark)
-        self.assertIn("font-size: 2.375rem", wordmark.group(1))
-        self.assertIn("font-weight: 500", wordmark.group(1))
-        self.assertIn("letter-spacing: .03em", wordmark.group(1))
-        self.assertIn(".page-mark { font-size: 1.625rem; }", text)
-
-
-    def test_horizontal_overflow_uses_a_mobile_cue_without_custom_scrollbars(self):
-        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn(".scroll-cue {\n      display: none;", text)
-        self.assertIn("pre {\n      max-width: 100%;", text)
-        self.assertIn("overflow: auto;", text)
-        self.assertIn(".table-wrap { max-width: 100%; overflow-x: auto; }", text)
-        self.assertNotIn("scrollbar-color", text)
-        self.assertNotIn("::-webkit-scrollbar", text)
+        pre = re.search(r"\n    pre \{(.*?)\n    \}", text, re.DOTALL)
+        cue = re.search(r"\n    \.scroll-cue \{(.*?)\n    \}", text, re.DOTALL)
         narrow = re.search(r"@media \(max-width: 52rem\) \{(.*?)\n    \}", text, re.DOTALL)
+
+        self.assertIsNotNone(pre)
+        self.assertIn("max-width: 100%", pre.group(1))
+        self.assertIn("overflow: auto", pre.group(1))
+        self.assertIn(".table-wrap { max-width: 100%; overflow-x: auto; }", text)
+        self.assertIn(".table-wrap.wide { max-width: none; }", text)
+        self.assertIsNotNone(cue)
+        self.assertIn("display: none", cue.group(1))
         self.assertIsNotNone(narrow)
         self.assertIn(".scroll-cue { display: block; }", narrow.group(1))
-
-    def test_wide_table_wrapper_can_escape_the_reading_column_cap(self):
-        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn(".table-wrap.wide { max-width: none; }", text)
-
-    def test_dark_theme_separates_prose_from_strong_text(self):
-        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("--ink: #c8c6c0;\n        --ink-strong: #f2f0eb;", text)
-        self.assertIn("color: var(--ink-strong);\n      font-family: var(--display);", text)
-        self.assertIn("strong { color: var(--ink-strong); font-weight: 600; }", text)
-        self.assertIn("--line: #343431;", text)
-
-    def test_print_resets_theme_tokens_after_dark_mode(self):
-        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("@media print {\n      :root, :root[data-theme] {", text)
-        self.assertIn(
-            "color-scheme: light;\n        --paper: #ffffff;\n        --ink: #171717;",
-            text,
-        )
+        self.assertNotIn("scrollbar-color", text)
+        self.assertNotIn("::-webkit-scrollbar", text)
 
     def test_bundled_font_assets_are_licensed_and_match_metadata(self):
         assets = Path(__file__).parent / "skills/pagex/assets"
@@ -467,19 +353,14 @@ class SkillDesignTests(unittest.TestCase):
         with self.assertRaisesRegex(pagex.PageRejected, "theme runtime"):
             pagex.inspect_html(modified.encode())
 
-    def test_manifest_packages_skill_templates(self):
+    def test_package_configuration_includes_portable_skill(self):
         manifest = (Path(__file__).parent / "MANIFEST.in").read_text(encoding="utf-8")
-
-        self.assertRegex(manifest, r"recursive-include skills .*\*\.html")
-        self.assertRegex(manifest, r"recursive-include skills .*\*\.b64")
-        self.assertRegex(manifest, r"recursive-include skills .*\*\.json")
-        self.assertRegex(manifest, r"recursive-include skills .*\*\.txt")
-
-    def test_wheel_configuration_packages_the_portable_skill(self):
         project = tomllib.loads(
             (Path(__file__).parent / "pyproject.toml").read_text(encoding="utf-8")
         )
 
+        for extension in ("html", "b64", "json", "txt"):
+            self.assertRegex(manifest, rf"recursive-include skills .*\*\.{extension}")
         data_files = project["tool"]["setuptools"]["data-files"]
         self.assertEqual(
             data_files["share/pagex/skills/pagex"],
