@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pagex"
-version = "0.2.0"
+version = "0.3.0"
 description = "Private one-file publishing for AI answer pages"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -32,3 +32,12 @@ Issues = "https://github.com/rittikbasu/pagex/issues"
 
 [tool.setuptools]
 py-modules = ["pagex"]
+
+[tool.setuptools.data-files]
+"share/pagex/skills/pagex" = ["skills/pagex/SKILL.md"]
+"share/pagex/skills/pagex/templates" = ["skills/pagex/templates/document.html"]
+"share/pagex/skills/pagex/assets" = [
+  "skills/pagex/assets/fonts.json",
+  "skills/pagex/assets/*.woff2.b64",
+]
+"share/pagex/skills/pagex/assets/licenses" = ["skills/pagex/assets/licenses/*.txt"]

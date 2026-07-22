@@ -4,4 +4,4 @@ include example.html
 include pagex.example.toml
 include test_pagex.py
 recursive-include docs *.md
-recursive-include skills *.md *.py *.json *.b64 *.txt
+recursive-include skills *.md *.html *.json *.b64 *.txt

@@ -1,10 +1,13 @@
 import base64
+import hashlib
+import json
 import os
 import pwd
 import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from contextlib import redirect_stderr
 from io import StringIO
@@ -14,10 +17,14 @@ from unittest.mock import patch
 import pagex
 
 
-SHORT_PAGE_ID = "23456789"
-SECOND_SHORT_PAGE_ID = "abcdefgh"
-LEGACY_PAGE_ID = "23456789ab"
-LONG_PAGE_ID = "23456789abcdefghjkmnpqrstu"
+SHORT_PAGE_ID = "abcdefgh"
+SECOND_SHORT_PAGE_ID = "jkmnpqrs"
+PAGE_CSP = (
+    "default-src 'none'; base-uri 'none'; connect-src 'none'; font-src data:; "
+    "form-action 'none'; frame-src 'none'; img-src data:; media-src 'none'; "
+    "object-src 'none'; script-src 'unsafe-inline'; script-src-attr 'none'; "
+    "style-src 'unsafe-inline'; worker-src 'none'"
+)
 
 
 class FakeR2:
@@ -75,6 +82,14 @@ class InspectPageTests(unittest.TestCase):
                 with self.assertRaisesRegex(pagex.PageRejected, "2 MiB"):
                     pagex.inspect_page(path)
 
+    def test_accepts_page_at_exact_size_limit(self):
+        source = self.page("<main></main>").encode()
+        padding = b"x" * (pagex.MAX_PAGE_BYTES - len(source))
+        source = source.replace(b"<main>", b"<main>" + padding, 1)
+
+        self.assertEqual(len(source), pagex.MAX_PAGE_BYTES)
+        self.assertEqual(pagex.inspect_html(source).title, "test")
+
     def test_rejects_unreadable_input_as_page_error(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "page.html"
@@ -100,6 +115,17 @@ class InspectPageTests(unittest.TestCase):
             result = pagex.inspect_page(path)
             self.assertGreater(result.text_length, 0)
 
+    def test_svg_title_does_not_change_the_document_title(self):
+        source = self.page(
+            "<main>answer<svg viewBox='0 0 20 20' role='img' "
+            "aria-labelledby='chart-title'><title id='chart-title'>retry ceiling</title>"
+            "<circle cx='10' cy='10' r='4'></circle></svg></main>"
+        )
+
+        result = pagex.inspect_html(source.encode())
+
+        self.assertEqual(result.title, "test")
+
     def test_accepts_embedded_woff2_font(self):
         font = base64.b64encode(b"wOF2" + b"pagex-font-data").decode()
         source = self.page(
@@ -116,6 +142,53 @@ class InspectPageTests(unittest.TestCase):
 
         self.assertEqual(result.title, "test")
 
+    def test_rejects_agent_authored_javascript(self):
+        source = self.page(
+            "<main>answer remains readable</main>",
+            f'<meta http-equiv="Content-Security-Policy" content="{PAGE_CSP}">'
+            "<script data-pagex='interaction'>document.body.dataset.ready='true';</script>",
+        )
+
+        with self.assertRaisesRegex(pagex.PageRejected, "bundled theme runtime"):
+            pagex.inspect_html(source.encode())
+
+    def test_rejects_theme_csp_outside_head(self):
+        template = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
+            encoding="utf-8"
+        )
+        runtime = re.search(
+            r'<script data-pagex="theme">(.*?)</script>', template, re.DOTALL
+        ).group(1)
+        source = (
+            "<!doctype html><html><head><title>test</title></head><body>"
+            f'<meta http-equiv="Content-Security-Policy" content="{PAGE_CSP}">'
+            f"<main>answer remains readable</main><script data-pagex='theme'>{runtime}</script>"
+            "</body></html>"
+        )
+
+        with self.assertRaisesRegex(pagex.PageRejected, "inside head"):
+            pagex.inspect_html(source.encode())
+
+    def test_rejects_reopened_head(self):
+        source = (
+            "<!doctype html><html><head><title>test</title></head><body>"
+            "<head><meta name='description' content='late'></head><main>answer</main>"
+            "</body></html>"
+        )
+
+        with self.assertRaisesRegex(pagex.PageRejected, "head element"):
+            pagex.inspect_html(source.encode())
+
+    def test_rejects_inputs_and_canvas(self):
+        for element in (
+            "<input type='range' aria-label='amount'>",
+            "<canvas aria-label='chart'>fallback</canvas>",
+        ):
+            with self.subTest(element=element), self.assertRaisesRegex(
+                pagex.PageRejected, "outside the Pagex boundary"
+            ):
+                pagex.inspect_html(self.page(f"<main>answer{element}</main>").encode())
+
     def test_rejects_unsafe_single_object_pages(self):
         unsafe_pages = {
             "missing doctype": "<html><head><title>x</title></head><body>x</body></html>",
@@ -128,6 +201,9 @@ class InspectPageTests(unittest.TestCase):
             "embedded svg": self.page("<svg><use href='https://example.com/x.svg#x'/></svg>x"),
             "form": self.page("<form action='https://example.com'><button>x</button></form>"),
             "css import": self.page("x", "<style>@import url('https://example.com/x.css')</style>"),
+            "inline css url": self.page(
+                "<main style='background:url(https://example.com/tracker.png)'>x</main>"
+            ),
             "external font": self.page(
                 "x",
                 "<style>@font-face{font-family:x;src:url(https://example.com/x.woff2)}</style>",
@@ -169,32 +245,279 @@ class InspectPageTests(unittest.TestCase):
 
 
 class SkillDesignTests(unittest.TestCase):
-    def test_bundled_design_css_is_self_contained_and_accepted(self):
-        script = Path(__file__).parent / "skills/pagex/scripts/design_css.py"
+    def test_skill_is_agent_skills_portable_and_references_its_template(self):
+        skill = (Path(__file__).parent / "skills" / "pagex" / "SKILL.md").read_text(encoding="utf-8")
+        frontmatter = skill.split("---", 2)[1]
 
-        result = subprocess.run(
-            [sys.executable, str(script)],
-            capture_output=True,
-            check=False,
-            text=True,
+        self.assertIn("name: pagex", frontmatter)
+        self.assertIn("description:", frontmatter)
+        self.assertIn("license: MIT", frontmatter)
+        self.assertIn("compatibility:", frontmatter)
+        self.assertIn("[`templates/document.html`](templates/document.html)", skill)
+        self.assertIn("[Cormorant Garamond OFL](assets/licenses/cormorant-garamond-OFL.txt)", skill)
+        self.assertIn("[Newsreader OFL](assets/licenses/newsreader-OFL.txt)", skill)
+        self.assertIn("separators must belong to the row", skill)
+        self.assertNotIn("/home/", skill)
+        self.assertNotIn("~/.hermes", skill)
+        self.assertNotIn("$HERMES", skill)
+        metadata = frontmatter.split("metadata:\n", 1)[1]
+        for line in metadata.splitlines():
+            if not line.strip():
+                continue
+            self.assertRegex(line, r"^  [a-z][a-z0-9_-]*: .+")
+            self.assertNotIn("[", line)
+
+    def test_readme_retains_hermes_codex_and_generic_agent_install_paths(self):
+        readme = (Path(__file__).parent / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn("hermes skills install", readme)
+        self.assertIn("$skill-installer", readme)
+        self.assertIn("other clients that support the agent skills format", readme)
+        self.assertIn("skills/pagex/SKILL.md", readme)
+
+    def test_bundled_document_template_is_self_contained_and_accepted(self):
+        template = Path(__file__).parent / "skills/pagex/templates/document.html"
+        assets = template.parent.parent / "assets"
+
+        source = template.read_bytes()
+        text = source.decode()
+        inspection = pagex.inspect_html(source)
+        embedded_fonts = re.findall(
+            r"src: url\(data:font/woff2;base64,([A-Za-z0-9+/=]+)\) format\('woff2'\);",
+            text,
+        )
+        font_faces = re.findall(r"@font-face\s*\{(.*?)\}", text, re.DOTALL)
+        asset_fonts = [
+            (assets / filename).read_text(encoding="ascii").strip()
+            for filename in (
+                "cormorant-garamond-latin.woff2.b64",
+                "newsreader-latin.woff2.b64",
+                "newsreader-italic-latin.woff2.b64",
+            )
+        ]
+
+        self.assertEqual(inspection.title, "Page title")
+        self.assertEqual(len(source) < pagex.MAX_PAGE_BYTES, True)
+        self.assertEqual(text.count("@font-face"), 3)
+        self.assertEqual(embedded_fonts, asset_fonts)
+        self.assertIn("font-family: 'Cormorant Garamond'", font_faces[0])
+        self.assertIn("font-style: normal", font_faces[0])
+        self.assertIn("font-family: 'Newsreader'", font_faces[1])
+        self.assertIn("font-style: normal", font_faces[1])
+        self.assertIn("font-family: 'Newsreader'", font_faces[2])
+        self.assertIn("font-style: italic", font_faces[2])
+        self.assertTrue(all(base64.b64decode(font).startswith(b"wOF2") for font in embedded_fonts))
+        self.assertIn("--display: 'Cormorant Garamond', Georgia, serif", text)
+        self.assertIn("--text: 'Newsreader', Georgia, serif", text)
+        self.assertIn("font-family: var(--text)", text)
+        self.assertRegex(text, r"h1, h2, h3, \.page-mark \{[^}]*font-family: var\(--display\)")
+        self.assertIn("--shell: 61.25rem", text)
+        self.assertIn("--measure: 68ch", text)
+        self.assertIn("--paper: #060606", text)
+        self.assertIn("--ink: #c8c6c0", text)
+        self.assertIn("--ink-strong: #f2f0eb", text)
+        self.assertIn("margin-inline: 0 auto", text)
+        self.assertIn('data-theme-icon="moon"', text)
+        self.assertNotIn("answer document", text)
+        self.assertIn("data-pagex=\"theme\"", text)
+        self.assertIn("data-theme-toggle", text)
+        self.assertIn("prefers-color-scheme: dark", text)
+        self.assertIn("prefers-reduced-motion: reduce", text)
+        self.assertNotRegex(text, r"<(?:form|iframe|link)\b")
+
+    def test_theme_control_uses_action_button_semantics(self):
+        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
+            encoding="utf-8"
         )
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("font-family: 'Cormorant Garamond'", result.stdout)
-        self.assertIn("font-family: 'Newsreader'", result.stdout)
-        source = InspectPageTests.page(
-            "<main><h1>designed answer</h1><p>readable body</p></main>",
-            f"<style>{result.stdout}</style>",
+        self.assertIn("button.setAttribute('aria-label'", text)
+        self.assertIn("button.addEventListener('click'", text)
+        self.assertIn('data-theme-icon="moon"', text)
+        self.assertIn('data-theme-icon="sun"', text)
+        self.assertIn("querySelector('[data-theme-icon=\"moon\"]')", text)
+        self.assertIn("querySelector('[data-theme-icon=\"sun\"]')", text)
+        self.assertIn("toggleAttribute('hidden', dark)", text)
+        self.assertIn("toggleAttribute('hidden', !dark)", text)
+        self.assertIn(".theme-toggle [hidden] { display: none; }", text)
+        self.assertNotIn("aria-pressed", text)
+
+    def test_theme_control_is_borderless_without_shrinking_its_hit_target(self):
+        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
+            encoding="utf-8"
         )
-        inspection = pagex.inspect_html(source.encode())
-        self.assertEqual(inspection.title, "test")
+        toggle = re.search(r"\n    \.theme-toggle \{(.*?)\n    \}", text, re.DOTALL)
+
+        self.assertIsNotNone(toggle)
+        self.assertIn("width: 2.75rem", toggle.group(1))
+        self.assertIn("height: 2.75rem", toggle.group(1))
+        self.assertIn("border: 0", toggle.group(1))
+        self.assertIn("color: var(--muted)", toggle.group(1))
+        self.assertNotIn("border-radius", toggle.group(1))
+        self.assertIn(".theme-toggle:hover { color: var(--ink-strong); }", text)
+
+    def test_theme_control_shares_the_wordmark_bottom_edge_and_optical_scale(self):
+        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
+            encoding="utf-8"
+        )
+        masthead = re.search(r"\n    \.masthead \{(.*?)\n    \}", text, re.DOTALL)
+
+        self.assertIsNotNone(masthead)
+        self.assertIn("align-items: end", masthead.group(1))
+        self.assertNotIn("masthead-tools", text)
+        self.assertRegex(
+            text,
+            r'<header class="masthead">\s*<span class="page-mark">pagex</span>\s*'
+            r'<button class="theme-toggle"',
+        )
+        self.assertIn(
+            ".theme-toggle svg {\n      width: 1.5rem;\n      height: 1.5rem;\n      transform: translateY(.125rem);\n    }",
+            text,
+        )
+        self.assertIn("place-items: end center", text)
+
+    def test_heading_uses_the_reading_column_without_a_second_width_cap(self):
+        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
+            encoding="utf-8"
+        )
+        heading = re.search(r"\n    h1 \{(.*?)\n    \}", text, re.DOTALL)
+
+        self.assertIsNotNone(heading)
+        self.assertNotIn("max-width", heading.group(1))
+
+    def test_wordmark_uses_the_reference_typographic_treatment(self):
+        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
+            encoding="utf-8"
+        )
+        wordmark = re.search(r"\n    \.page-mark \{(.*?)\n    \}", text, re.DOTALL)
+
+        self.assertIsNotNone(wordmark)
+        self.assertIn("font-size: 2.375rem", wordmark.group(1))
+        self.assertIn("font-weight: 500", wordmark.group(1))
+        self.assertIn("letter-spacing: .03em", wordmark.group(1))
+        self.assertIn(".page-mark { font-size: 1.625rem; }", text)
+
+
+    def test_horizontal_overflow_uses_a_mobile_cue_without_custom_scrollbars(self):
+        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(".scroll-cue {\n      display: none;", text)
+        self.assertIn("pre {\n      max-width: 100%;", text)
+        self.assertIn("overflow: auto;", text)
+        self.assertIn(".table-wrap { max-width: 100%; overflow-x: auto; }", text)
+        self.assertNotIn("scrollbar-color", text)
+        self.assertNotIn("::-webkit-scrollbar", text)
+        narrow = re.search(r"@media \(max-width: 52rem\) \{(.*?)\n    \}", text, re.DOTALL)
+        self.assertIsNotNone(narrow)
+        self.assertIn(".scroll-cue { display: block; }", narrow.group(1))
+
+    def test_wide_table_wrapper_can_escape_the_reading_column_cap(self):
+        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(".table-wrap.wide { max-width: none; }", text)
+
+    def test_dark_theme_separates_prose_from_strong_text(self):
+        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("--ink: #c8c6c0;\n        --ink-strong: #f2f0eb;", text)
+        self.assertIn("color: var(--ink-strong);\n      font-family: var(--display);", text)
+        self.assertIn("strong { color: var(--ink-strong); font-weight: 600; }", text)
+        self.assertIn("--line: #343431;", text)
+
+    def test_print_resets_theme_tokens_after_dark_mode(self):
+        text = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("@media print {\n      :root, :root[data-theme] {", text)
+        self.assertIn(
+            "color-scheme: light;\n        --paper: #ffffff;\n        --ink: #171717;",
+            text,
+        )
+
+    def test_bundled_font_assets_are_licensed_and_match_metadata(self):
+        assets = Path(__file__).parent / "skills/pagex/assets"
+        metadata = json.loads((assets / "fonts.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(len(metadata), 3)
+        for item in metadata:
+            payload = (assets / item["file"]).read_text(encoding="ascii").strip()
+            font = base64.b64decode(payload, validate=True)
+            self.assertTrue(font.startswith(b"wOF2"))
+            self.assertEqual(len(font), item["bytes"])
+            self.assertEqual(hashlib.sha256(font).hexdigest(), item["sha256"])
+        for license_name in ("cormorant-garamond-OFL.txt", "newsreader-OFL.txt"):
+            license_text = (assets / "licenses" / license_name).read_text(encoding="utf-8")
+            self.assertIn("SIL OPEN FONT LICENSE Version 1.1", license_text)
+
+    def test_rejects_modified_pagex_theme_runtime(self):
+        template = (Path(__file__).parent / "skills/pagex/templates/document.html").read_text(
+            encoding="utf-8"
+        )
+        modified = template.replace(
+            "const storageKey = 'pagex-theme';",
+            "const storageKey = 'not-pagex-theme';",
+        )
+        self.assertNotEqual(template, modified)
+        with self.assertRaisesRegex(pagex.PageRejected, "theme runtime"):
+            pagex.inspect_html(modified.encode())
+
+    def test_manifest_packages_skill_templates(self):
+        manifest = (Path(__file__).parent / "MANIFEST.in").read_text(encoding="utf-8")
+
+        self.assertRegex(manifest, r"recursive-include skills .*\*\.html")
+        self.assertRegex(manifest, r"recursive-include skills .*\*\.b64")
+        self.assertRegex(manifest, r"recursive-include skills .*\*\.json")
+        self.assertRegex(manifest, r"recursive-include skills .*\*\.txt")
+
+    def test_wheel_configuration_packages_the_portable_skill(self):
+        project = tomllib.loads(
+            (Path(__file__).parent / "pyproject.toml").read_text(encoding="utf-8")
+        )
+
+        data_files = project["tool"]["setuptools"]["data-files"]
+        self.assertEqual(
+            data_files["share/pagex/skills/pagex"],
+            ["skills/pagex/SKILL.md"],
+        )
+        self.assertEqual(
+            data_files["share/pagex/skills/pagex/templates"],
+            ["skills/pagex/templates/document.html"],
+        )
+        self.assertEqual(
+            data_files["share/pagex/skills/pagex/assets"],
+            [
+                "skills/pagex/assets/fonts.json",
+                "skills/pagex/assets/*.woff2.b64",
+            ],
+        )
+        self.assertEqual(
+            data_files["share/pagex/skills/pagex/assets/licenses"],
+            ["skills/pagex/assets/licenses/*.txt"],
+        )
 
 
 class PageIdTests(unittest.TestCase):
-    def test_generates_unique_unambiguous_8_character_ids(self):
+    def test_generates_unique_lowercase_8_character_ids(self):
         identifiers = {pagex.generate_page_id() for _ in range(1_000)}
         self.assertEqual(len(identifiers), 1_000)
-        self.assertTrue(all(re.fullmatch(r"[23456789abcdefghjkmnpqrstuvwxyz]{8}", value) for value in identifiers))
+        self.assertTrue(all(re.fullmatch(r"[a-z]{8}", value) for value in identifiers))
+
+    def test_documented_page_ids_match_the_generated_format(self):
+        root = Path(__file__).parent
+        documentation = "\n".join(
+            (root / path).read_text(encoding="utf-8")
+            for path in ("README.md", "docs/cloudflare.md")
+        )
+        examples = re.findall(r"https://pages\.example\.com/([a-z0-9]+)", documentation)
+
+        self.assertTrue(examples)
+        self.assertTrue(all(re.fullmatch(r"[a-z]{8}", value) for value in examples))
 
 
 class FileSafetyTests(unittest.TestCase):
@@ -450,8 +773,28 @@ class PublisherTests(unittest.TestCase):
             result = self.make_publisher(root, FakeR2()).publish(source, id_factory=lambda: next(identifiers))
             self.assertEqual(result.page_id, SECOND_SHORT_PAGE_ID)
 
-    def test_update_accepts_8_10_and_26_character_ids_with_one_upload(self):
-        for page_id in (SHORT_PAGE_ID, LEGACY_PAGE_ID, LONG_PAGE_ID):
+    def test_update_accepts_current_page_id_with_one_upload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = root / "old.html"
+            new = root / "new.html"
+            self.html(old, "old")
+            self.html(new, "new")
+            local = root / f"data/pages/{SHORT_PAGE_ID}.html"
+            local.parent.mkdir(parents=True)
+            local.write_bytes(old.read_bytes())
+            fake = FakeR2()
+            result = self.make_publisher(root, fake).update(SHORT_PAGE_ID, new)
+            self.assertEqual(result.page_id, SHORT_PAGE_ID)
+            self.assertEqual(local.read_bytes(), new.read_bytes())
+            self.assertEqual(fake.objects[f"pagex/{SHORT_PAGE_ID}"], new.read_bytes())
+            self.assertEqual([command[3] for command in fake.commands], ["put"])
+            versions = list((root / f"data/versions/{SHORT_PAGE_ID}").glob("*.html"))
+            self.assertEqual(len(versions), 1)
+            self.assertEqual(versions[0].read_bytes(), old.read_bytes())
+
+    def test_update_accepts_page_ids_from_earlier_releases(self):
+        for page_id in ("4k7m9q2x", "abcdefghjk", "a" * 26):
             with self.subTest(page_id=page_id), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 old = root / "old.html"
@@ -462,14 +805,23 @@ class PublisherTests(unittest.TestCase):
                 local.parent.mkdir(parents=True)
                 local.write_bytes(old.read_bytes())
                 fake = FakeR2()
+
                 result = self.make_publisher(root, fake).update(page_id, new)
+
                 self.assertEqual(result.page_id, page_id)
                 self.assertEqual(local.read_bytes(), new.read_bytes())
                 self.assertEqual(fake.objects[f"pagex/{page_id}"], new.read_bytes())
-                self.assertEqual([command[3] for command in fake.commands], ["put"])
-                versions = list((root / f"data/versions/{page_id}").glob("*.html"))
-                self.assertEqual(len(versions), 1)
-                self.assertEqual(versions[0].read_bytes(), old.read_bytes())
+
+    def test_update_rejects_invalid_page_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "new.html"
+            self.html(source, "new")
+            publisher = self.make_publisher(Path(directory), FakeR2())
+            for page_id in ("01234567", "abcdefghij", "abcdefghijklmnopqrstuvwxyz"):
+                with self.subTest(page_id=page_id), self.assertRaisesRegex(
+                    pagex.PublishFailed, "invalid page ID"
+                ):
+                    publisher.update(page_id, source)
 
     def test_update_restores_local_version_when_upload_fails(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -501,6 +853,42 @@ class PublisherTests(unittest.TestCase):
                 source.read_bytes(),
             )
 
+    def test_publish_removes_local_page_after_definitive_upload_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "answer.html"
+            self.html(source)
+            fake = FakeR2()
+            fake.fail_next_put = True
+
+            with self.assertRaisesRegex(pagex.PublishFailed, "simulated upload failure"):
+                self.make_publisher(root, fake).publish(
+                    source, id_factory=lambda: SHORT_PAGE_ID
+                )
+
+            self.assertFalse((root / f"data/pages/{SHORT_PAGE_ID}.html").exists())
+
+    def test_publish_reports_retained_page_when_failure_cleanup_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "answer.html"
+            self.html(source)
+            fake = FakeR2()
+            fake.fail_next_put = True
+
+            with patch.object(Path, "unlink", side_effect=PermissionError("denied")):
+                with self.assertRaisesRegex(
+                    pagex.PublishFailed, f"cleanup failed.*{SHORT_PAGE_ID}"
+                ):
+                    self.make_publisher(root, fake).publish(
+                        source, id_factory=lambda: SHORT_PAGE_ID
+                    )
+
+            self.assertEqual(
+                (root / f"data/pages/{SHORT_PAGE_ID}.html").read_bytes(),
+                source.read_bytes(),
+            )
+
     def test_update_retains_new_local_page_when_upload_outcome_is_unknown(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -524,7 +912,7 @@ class CliTests(unittest.TestCase):
         commands = (
             ["check", "a.html", "--browser"],
             ["publish", "a.html", "--browser"],
-            ["update", LEGACY_PAGE_ID, "a.html", "--browser"],
+            ["update", SHORT_PAGE_ID, "a.html", "--browser"],
         )
         for command in commands:
             with self.subTest(command=command), redirect_stderr(StringIO()), self.assertRaises(SystemExit):

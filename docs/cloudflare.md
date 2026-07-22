@@ -51,7 +51,7 @@ pages.example.com
 pagex stores each page at the bucket root under its generated id, so a page will be served as:
 
 ```text
-https://pages.example.com/4k7m9q2x
+https://pages.example.com/jkmnpqrs
 ```
 
 ## 4. create the access application

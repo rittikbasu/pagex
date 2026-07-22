@@ -11,6 +11,7 @@ import argparse
 import base64
 import binascii
 import fcntl
+import hashlib
 import os
 import pwd
 import re
@@ -23,9 +24,12 @@ from urllib.parse import urlsplit
 
 
 MAX_PAGE_BYTES = 2 * 1024 * 1024
-PAGE_ID_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
+PAGE_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 PAGE_ID_LENGTH = 8
 PAGE_ID_PATTERN = re.compile(f"[{re.escape(PAGE_ID_ALPHABET)}]+")
+LEGACY_PAGE_ID_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
+LEGACY_PAGE_ID_LENGTHS = {8, 10, 26}
+LEGACY_PAGE_ID_PATTERN = re.compile(f"[{re.escape(LEGACY_PAGE_ID_ALPHABET)}]+")
 R2_BUCKET_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])")
 HOST_LABEL_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 CONFIG_KEYS = {"base_url", "bucket", "data_dir", "wrangler"}
@@ -36,11 +40,11 @@ SVG_TAGS = {
 }
 ALLOWED_TAGS = {
     "a", "abbr", "article", "aside", "b", "blockquote", "body", "br",
-    "caption", "cite", "code", "col", "colgroup", "dd", "details", "dfn",
+    "button", "caption", "cite", "code", "col", "colgroup", "dd", "details", "dfn",
     "div", "dl", "dt", "em", "figcaption", "figure", "footer", "h1", "h2",
     "h3", "h4", "h5", "h6", "head", "header", "hr", "html", "i", "img",
     "kbd", "li", "main", "mark", "meta", "nav", "ol", "p", "pre", "q",
-    "s", "samp", "section", "small", "span", "strong", "style", "sub",
+    "s", "samp", "script", "section", "small", "span", "strong", "style", "sub",
     "summary", "sup", "table", "tbody", "td", "tfoot", "th", "thead", "time",
     "title", "tr", "u", "ul", "var",
 } | SVG_TAGS
@@ -53,11 +57,12 @@ SVG_PAINT_ATTRIBUTES = {
 TAG_ATTRIBUTES = {
     "a": {"href", "rel", "target"},
     "blockquote": {"cite"},
+    "button": {"disabled", "type"},
     "col": {"span"},
     "details": {"open"},
     "img": {"alt", "decoding", "height", "loading", "src", "width"},
     "li": {"value"},
-    "meta": {"charset", "content", "name"},
+    "meta": {"charset", "content", "http-equiv", "name"},
     "ol": {"reversed", "start", "type"},
     "q": {"cite"},
     "td": {"colspan", "headers", "rowspan"},
@@ -80,6 +85,22 @@ TAG_ATTRIBUTES = {
     "clippath": {"clippathunits", "transform"},
 }
 SAFE_META_NAMES = {"color-scheme", "description", "robots", "theme-color", "viewport"}
+PAGE_CSP_DIRECTIVES = {
+    "base-uri": "'none'",
+    "connect-src": "'none'",
+    "default-src": "'none'",
+    "font-src": "data:",
+    "form-action": "'none'",
+    "frame-src": "'none'",
+    "img-src": "data:",
+    "media-src": "'none'",
+    "object-src": "'none'",
+    "script-src": "'unsafe-inline'",
+    "script-src-attr": "'none'",
+    "style-src": "'unsafe-inline'",
+    "worker-src": "'none'",
+}
+THEME_RUNTIME_SHA256 = "af780b3803d0086a11dd371dd4ab032a311c9fd4ad02695953a86d815a0ad3a3"
 SAFE_DATA_IMAGE = re.compile(r"data:image/(?:gif|jpeg|png|webp);base64,[A-Za-z0-9+/=]+", re.IGNORECASE)
 SAFE_DATA_FONT = re.compile(
     r"url\(\s*(?P<quote>['\"]?)data:font/woff2;base64,"
@@ -129,6 +150,19 @@ def _mask_embedded_woff2(css: str) -> str:
         return "embedded-woff2"
 
     return SAFE_DATA_FONT.sub(validate, css)
+
+
+def _is_offline_csp(content: str) -> bool:
+    directives: dict[str, str] = {}
+    for raw_directive in content.split(";"):
+        parts = raw_directive.split()
+        if not parts:
+            continue
+        name = parts[0].lower()
+        if name in directives:
+            return False
+        directives[name] = " ".join(parts[1:])
+    return directives == PAGE_CSP_DIRECTIVES
 
 
 @dataclass(frozen=True)
@@ -283,13 +317,21 @@ class _PageParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.in_title = False
+        self.in_head = False
         self.in_style = False
+        self.in_script = False
+        self.in_button = False
+        self.button_has_accessible_name = False
+        self.button_text_parts: list[str] = []
         self.title_parts: list[str] = []
         self.css_parts: list[str] = []
+        self.current_script_parts: list[str] = []
+        self.scripts: list[str] = []
         self.text_length = 0
         self.has_html = False
         self.has_head = False
         self.has_body = False
+        self.has_page_csp = False
         self.violations: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -299,12 +341,7 @@ class _PageParser(HTMLParser):
             self.violations.append(f"duplicate attributes on <{tag}>")
         attributes = {name.lower(): value or "" for name, value in attrs}
         if tag not in ALLOWED_TAGS:
-            message = (
-                "JavaScript is outside the Pagex v0 boundary"
-                if tag == "script"
-                else f"element <{tag}> is outside the Pagex v0 boundary"
-            )
-            self.violations.append(message)
+            self.violations.append(f"element <{tag}> is outside the Pagex boundary")
         allowed_attributes = GLOBAL_ATTRIBUTES | TAG_ATTRIBUTES.get(tag, set())
         for name in attributes:
             if name.startswith("on"):
@@ -312,15 +349,38 @@ class _PageParser(HTMLParser):
             elif not (name in allowed_attributes or name.startswith("aria-") or name.startswith("data-")):
                 self.violations.append(f"attribute {name} on <{tag}> is not allowed")
         if tag == "html":
+            if self.has_html:
+                self.violations.append("page must contain only one html element")
             self.has_html = True
         elif tag == "head":
+            if self.has_head or self.has_body:
+                self.violations.append("head element must appear once before body")
             self.has_head = True
+            self.in_head = True
         elif tag == "body":
+            if self.has_body or not self.has_head or self.in_head:
+                self.violations.append("body element must appear once after head")
             self.has_body = True
         elif tag == "title":
-            self.in_title = True
+            self.in_title = self.in_head
         elif tag == "style":
             self.in_style = True
+        elif tag == "script":
+            self.in_script = True
+            self.current_script_parts = []
+            if not self.has_page_csp:
+                self.violations.append(
+                    "offline content security policy must appear before the first script"
+                )
+            if attributes.get("data-pagex", "") != "theme":
+                self.violations.append("inline scripts must use the bundled theme runtime")
+        elif tag == "button":
+            self.in_button = True
+            self.button_text_parts = []
+            self.button_has_accessible_name = bool(
+                attributes.get("aria-label", "").strip()
+                or attributes.get("aria-labelledby", "").strip()
+            )
 
         inline_style = attributes.get("style", "").strip()
         if inline_style:
@@ -342,28 +402,66 @@ class _PageParser(HTMLParser):
             source = attributes.get("src", "")
             if not SAFE_DATA_IMAGE.fullmatch(source):
                 self.violations.append("images must be embedded raster data URLs")
+        if tag == "button" and attributes.get("type", "").lower() != "button":
+            self.violations.append("buttons must use type button")
         if tag == "meta":
+            http_equiv = attributes.get("http-equiv", "").lower()
             name = attributes.get("name", "").lower()
-            if name and name not in SAFE_META_NAMES:
+            if not self.in_head:
+                self.violations.append("meta elements must appear inside head")
+            if http_equiv:
+                if http_equiv != "content-security-policy":
+                    self.violations.append(f"meta http-equiv {http_equiv} is not allowed")
+                elif self.has_page_csp:
+                    self.violations.append("content security policy must not be repeated")
+                elif not _is_offline_csp(attributes.get("content", "")):
+                    self.violations.append(
+                        "content security policy must match the Pagex offline policy"
+                    )
+                else:
+                    self.has_page_csp = True
+                if name or "charset" in attributes:
+                    self.violations.append(
+                        "content security policy meta cannot also declare name or charset"
+                    )
+            elif name and name not in SAFE_META_NAMES:
                 self.violations.append(f"meta name {name} is not allowed")
-            if "content" in attributes and not name:
+            if "content" in attributes and not (name or http_equiv):
                 self.violations.append("meta content requires an allowed name")
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
-        if tag == "title":
+        if tag == "head":
+            self.in_head = False
+        elif tag == "title":
             self.in_title = False
         elif tag == "style":
             self.in_style = False
+        elif tag == "script":
+            self.in_script = False
+            self.scripts.append("".join(self.current_script_parts))
+            self.current_script_parts = []
+        elif tag == "button":
+            if not self.button_has_accessible_name and not "".join(
+                self.button_text_parts
+            ).strip():
+                self.violations.append("buttons require an accessible name")
+            self.in_button = False
+            self.button_has_accessible_name = False
+            self.button_text_parts = []
 
     def handle_data(self, data: str) -> None:
         text = data.strip()
         if not text:
             return
+        if self.in_button:
+            self.button_text_parts.append(data)
         if self.in_title:
             self.title_parts.append(text)
         elif self.in_style:
             self.css_parts.append(data)
+        elif self.in_script:
+            self.current_script_parts.append(data)
         else:
             self.text_length += len(text)
 
@@ -388,6 +486,13 @@ def inspect_html(data: bytes) -> PageInspection:
     parser.feed(source)
     if not (parser.has_html and parser.has_head and parser.has_body):
         raise PageRejected("page must contain html, head and body elements")
+    if len(parser.scripts) > 1:
+        parser.violations.append("pages may contain only one bundled theme script")
+    for javascript in parser.scripts:
+        if not javascript.strip():
+            parser.violations.append("inline scripts cannot be empty")
+        elif hashlib.sha256(javascript.encode()).hexdigest() != THEME_RUNTIME_SHA256:
+            parser.violations.append("Pagex theme runtime must match the audited template")
     if parser.violations:
         raise PageRejected(parser.violations[0])
     css = _mask_embedded_woff2("\n".join(parser.css_parts))
@@ -528,13 +633,21 @@ class PagexPublisher:
                 self._upload(page_id, local_path)
             except UploadUncertain:
                 raise
-            except PublishFailed:
-                _safe_unlink(local_path)
+            except PublishFailed as upload_error:
+                try:
+                    local_path.unlink(missing_ok=True)
+                except OSError as cleanup_error:
+                    raise PublishFailed(
+                        f"{upload_error}; cleanup failed for {page_id}; "
+                        f"local page kept at {local_path}"
+                    ) from cleanup_error
                 raise
             return self._result(page_id, local_path)
 
     def update(self, page_id: str, source: Path) -> PublishResult:
-        if len(page_id) not in {PAGE_ID_LENGTH, 10, 26} or not PAGE_ID_PATTERN.fullmatch(page_id):
+        current_id = len(page_id) == PAGE_ID_LENGTH and PAGE_ID_PATTERN.fullmatch(page_id)
+        legacy_id = len(page_id) in LEGACY_PAGE_ID_LENGTHS and LEGACY_PAGE_ID_PATTERN.fullmatch(page_id)
+        if not current_id and not legacy_id:
             raise PublishFailed("invalid page ID")
         data = _read_page(source)
         inspect_html(data)

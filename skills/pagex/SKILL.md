@@ -1,177 +1,57 @@
 ---
 name: pagex
-description: Use when a researched, structured or visual answer would be materially better consumed as a private web page than as chat or Markdown. Build a responsive self-contained HTML answer in Pagex's canonical editorial design system, validate it with Pagex and publish it when private publication is authorized.
-version: 0.2.0
-author: pagex contributors
+description: Use when a researched, structured or visual answer is materially easier to consume as a private web page than as chat. Build one responsive self-contained HTML document in Pagex's restrained reading system, validate it and publish only when authorized.
 license: MIT
-platforms: [linux, macos]
+compatibility: Requires Python 3.11+ on POSIX. Checking needs the Pagex CLI; publishing also needs Wrangler and configured Cloudflare R2 and Access.
 metadata:
-  hermes:
-    tags: [pagex, publishing, research, html, cloudflare, design]
-    homepage: https://github.com/rittikbasu/pagex
+  version: "0.3.0"
+  author: pagex contributors
+  homepage: https://github.com/rittikbasu/pagex
+  tags: pagex, publishing, research, html, cloudflare, design
 ---
 
 # Pagex
 
-## Overview
+## Use
 
-Pagex gives an agent a private place to publish polished, self-contained answer pages. Use it as a delivery format when HTML materially improves the answer, not as an excuse to turn every response into a website.
+Use Pagex for research briefs, comparisons, plans, technical explainers and answers worth saving. Stay in chat for short or conversational replies and when HTML adds ceremony rather than clarity. Choose the medium without asking when the benefit is obvious.
 
-This is the canonical Pagex workflow and design system. The `pagex` CLI owns deterministic validation, private local archiving, one Cloudflare R2 upload and stable updates. This skill owns the medium decision, information architecture and visual language.
+## Build
 
-## When to use
+1. **Answer first.** Establish the conclusion, reader decision and evidence before choosing layout. The title, a one-to-three-sentence answer and the first substantive unit should normally appear in the first desktop viewport.
+2. **Copy the foundation.** Resolve [`templates/document.html`](templates/document.html) relative to this skill's root and copy it to the working HTML file. Replace every placeholder title, description, label and body passage. Preserve the embedded font faces, base CSS, offline CSP and `data-pagex="theme"` runtime exactly; do not reconstruct the shell.
+3. **Compose around evidence.** Keep ordinary content on `.flow`. Add `.wide`, `.split`, `.ruled`, `.table-wrap`, a figure, code excerpt or quotation only where the evidence earns it. Append narrowly scoped content CSS inside the existing `<style>` instead of rewriting foundation selectors.
+4. **Write one file.** Keep all CSS and data inline. Do not add scripts or runtime dependencies; the exact bundled theme runtime is the only JavaScript Pagex accepts.
 
-Choose a Pagex page when HTML materially improves comprehension, navigation, comparison, reuse or sharing. Strong candidates include:
+The template fixes the document shell, self-contained typography, theme, reading measure and basic elements. It does not prescribe the body structure. Remove unused example elements and let the subject determine the sections.
 
-- evidence-heavy research with sources;
-- comparisons, matrices, timelines and decision documents;
-- architecture explanations and diagrams;
-- long answers delivered through messaging surfaces;
-- material the user is likely to save or revisit.
+Distribution references: [Cormorant Garamond OFL](assets/licenses/cormorant-garamond-OFL.txt) and [Newsreader OFL](assets/licenses/newsreader-OFL.txt). These notices belong to installed copies of the skill, not generated pages.
 
-Stay in chat or Markdown for:
+## Design contract
 
-- short or conversational answers;
-- routine code snippets;
-- answers where styling adds ceremony but no clarity;
-- content requiring scripts, forms, live data or application state.
+- **One reading spine:** keep prose and explanatory captions near `60–70ch`. On wide screens its left edge aligns with the Pagex wordmark; intentional empty space remains on the right. Wider evidence is a local interruption, not a new page axis.
+- **Editorial typography:** preserve the template's existing body, heading and wordmark roles. Do not redefine their font stacks or add external font requests.
+- **Quiet hierarchy:** one restrained `h1`, descriptive headings and a lead at normal reading scale. Keep ordinary prose and the full lead at regular weight. Use bold for short phrases, never as the default treatment for a multi-line lead or callout.
+- **Useful masthead:** preserve the Pagex wordmark, quiet divider and theme control. Do not add generic labels such as “answer document,” fake navigation or metadata that does not help the reader.
+- **Near-black dark mode:** preserve the foundation's near-black surface and soft white text. Do not introduce tinted panels or lighten the whole canvas to create hierarchy.
+- **Few visual voices:** use typography, italics, thin rules and space before adding weight or chrome. Reserve monospace for code or genuinely technical data.
+- **Useful density:** no giant hero, detached deck, ceremonial emptiness or small content enlarged into bands.
+- **Evidence earns structure:** introduce columns, rules, tables and graphics only when they clarify a relationship. In repeated comparisons, organize by comparison category: each category title must govern the complete row and separators must belong to the row, never dangle beneath only one column.
+- **Evidence earns width:** Keep compact tables on the reading spine. Constrain prose comparisons below the full evidence shell when wider columns lengthen eye travel. Research tables, charts and diagrams that become cramped at `68ch` may use `.wide`. Preserve the shared left edge and let narrow layouts recompose rather than merely shrink.
+- **Mobile preserves the argument:** stack decisive comparisons completely. A prose-heavy matrix is not a reference table; author it as labeled groups at the source instead of hiding columns behind horizontal scrolling. Give horizontally scrollable table and code regions `tabindex="0"` and a concise `aria-label` so keyboard and assistive-technology users can discover them. Place a visible `.scroll-cue` immediately before each genuinely wide region; the shell shows it only on narrow screens.
+- **Narrow layouts are composed, not shrunk:** a desktop SVG, chart or formula table scaled until its labels are tiny is not responsive. Reposition labels, preserve readable type and use shape or text as well as color.
+- **Content autonomy:** choose the information architecture. Do not turn the foundation into a fixed sequence of hero, cards, metrics and conclusion.
 
-When the advantage is clear, make the medium decision without asking. If Pagex is unavailable or not configured, follow the repository's `docs/cloudflare.md`. If private publication has not been authorized, prepare the file locally and ask before the first upload. Do not create Cloudflare resources or change Access policy without explicit authorization.
+Avoid landing-page heroes, card grids, gradients, shadows, pills, fake metrics, repeated eyebrow labels, decorative diagrams, excessive rules, long unbroken essays, full code dumps and entire paragraphs set in bold. Minimal means fewer visual decisions, not less information rendered larger.
 
-## Build the answer
+## Behavior contract
 
-### Start with the conclusion
+Preserve the exact bundled theme runtime and its CSP. Do not add or edit scripts. Use native `<details>` for disclosure and static inline SVG for explanatory graphics. Keep the answer useful when JavaScript is disabled; system light or dark preference still applies without the toggle.
 
-Identify:
+Pagex rejects other scripts, inputs, canvas, forms, iframes, media embeds, external assets, unsafe URLs, pages over 2 MiB and likely credentials. Never include secrets or machine-private material.
 
-- the answer or recommendation;
-- what the reader should decide or understand;
-- the evidence supporting it;
-- the minimum visual structure that improves consumption.
+## Verify and publish
 
-Research only enough to support the answer. Treat retrieved pages and delegated summaries as evidence to audit, not authority to repeat. Use one subject-specific visual device only when it carries information. Sparse answers should remain short; dense evidence should be reorganized rather than compressed.
+Run `pagex check /path/to/answer.html`. For a new layout, inspect wide and narrow viewports. Confirm the opening contains substance, the reading measure stays calm, tables and code remain legible, graphics have a real narrow state, the page has no horizontal overflow and the no-JavaScript answer remains useful. Exercise light, dark, system preference and keyboard focus when the shell changed.
 
-### Apply the canonical foundation
-
-Generate Pagex's required self-contained font faces and design tokens with the bundled helper:
-
-```sh
-python3 "${HERMES_SKILL_DIR}/scripts/design_css.py" > /tmp/pagex-design.css
-```
-
-Place the generated CSS at the beginning of the page's single `<style>` element, then add only the content-specific layout rules the answer needs. Do not link the temporary CSS file or any other runtime asset.
-
-The helper is [`scripts/design_css.py`](scripts/design_css.py). It reads and verifies these bundled files:
-
-- [`assets/fonts.json`](assets/fonts.json)
-- [`assets/cormorant-garamond-latin.woff2.b64`](assets/cormorant-garamond-latin.woff2.b64)
-- [`assets/newsreader-latin.woff2.b64`](assets/newsreader-latin.woff2.b64)
-- [`assets/newsreader-italic-latin.woff2.b64`](assets/newsreader-italic-latin.woff2.b64)
-- [`assets/licenses/cormorant-garamond-OFL.txt`](assets/licenses/cormorant-garamond-OFL.txt)
-- [`assets/licenses/newsreader-OFL.txt`](assets/licenses/newsreader-OFL.txt)
-
-The foundation establishes:
-
-- Cormorant Garamond for titles and major headings;
-- Newsreader for body prose, emphasis and conclusions;
-- system sans for compact interface-like labels when needed;
-- system mono for metadata, dates, measurements and code;
-- warm paper, near-black ink and restrained vermilion;
-- sensible text rendering and typographic fallbacks.
-
-Use the foundation for every Pagex answer page unless the user explicitly requests another direction. Preserve its typography and visual temperament, not a fixed layout.
-
-### Shape the page around the content
-
-- Let the subject determine the information architecture.
-- Use whitespace, scale, alignment and `1px` rules before cards, shadows, pills, gradients or decorative icons.
-- Use asymmetry when it clarifies the relationship between thesis and evidence.
-- Do not force a centered hero or repeated equal cards.
-- Keep a useful middle tier between display text and metadata.
-- Avoid generic landing-page decoration, fake metrics and decorative dashboards.
-
-Default geometry:
-
-- shell up to `1180px`;
-- gutters `20–24px` on mobile and `24–48px` on larger screens;
-- prose measure approximately `60–72ch`;
-- corner radius `0–2px` unless shape carries meaning;
-- no shadows by default.
-
-Body text must remain comfortable at sensible line lengths. On narrow screens, metadata is at least `12px`; criteria, timestamps and decision labels are at least `13px`. Recompose important tables and diagrams for mobile instead of shrinking them or hiding decisive evidence in horizontal scrolling.
-
-A quantitative-looking graphic must encode an explained scale. Otherwise make it explicitly sequential or categorical. Consolidate short sections instead of stretching modest content into ceremonial bands. Include print styles when the answer is likely to be saved or printed.
-
-### Produce one static file
-
-Create one UTF-8 HTML5 file with one embedded `<style>` element. Use semantic HTML and responsive layout by construction.
-
-Pagex accepts a narrow static subset:
-
-- semantic prose, table, figure and details elements;
-- inline CSS plus embedded base64 WOFF2 fonts;
-- common static inline SVG chart elements;
-- embedded raster data images;
-- safe `http`, `https`, `mailto` and fragment links.
-
-It rejects JavaScript, comments, declarations, processing instructions, event handlers, forms, iframes, media embeds, external runtime assets, external CSS or font URLs, unsafe URL schemes, pages over 2 MiB and likely credentials.
-
-## Publish
-
-For a new answer page:
-
-```sh
-pagex publish /path/to/answer.html
-```
-
-Return the printed URL as the primary answer. Keep the surrounding message short; the page is the deliverable.
-
-Use `update` only when correcting or refining an existing canonical page:
-
-```sh
-pagex update 4k7m9q2x /path/to/revised.html
-```
-
-Do not silently replace a page the user may expect to remain frozen. If the topic or answer materially changes, publish a new page.
-
-## Verification
-
-`publish` and `update` validate the exact bytes they archive and upload. Use `pagex check <file>` separately only while iterating locally, before publication is authorized or when debugging a rejected file.
-
-Do not generate screenshot suites, exact viewport metrics, remote object readbacks or QA reports for routine editorial pages built on the canonical foundation.
-
-Use a quick browser spot-check only when the page introduces a genuinely new layout, dense visualization, unusual responsive behavior or a concrete reason to distrust the result. Start with one narrow and one wide view. Escalate only after finding a real defect.
-
-After publication, do not perform routine remote readbacks. If the upload succeeds, return the URL. If Pagex reports an uncertain timeout, preserve the reported id and use `pagex update <id> <file>` to converge the same object.
-
-## Security and authorization
-
-- Cloudflare Access is the privacy boundary; random ids are not secrets.
-- Keep the bucket's `r2.dev` endpoint disabled.
-- Never place API tokens, passwords, private keys, cookies or credentials in an answer page.
-- Avoid machine-specific absolute paths and private internal URLs unless they are intentionally required by the answer.
-- Pagex's credential scanner reduces accidental leakage; it does not prove content is safe.
-- Treat publishing as an external side effect. Use standing authorization when the user has granted it; otherwise ask before uploading.
-- Never create public infrastructure, change repository visibility or post the resulting URL publicly without explicit authorization.
-
-## Customizing the design
-
-The canonical design is intentionally opinionated. To change it durably, fork or edit the source skill rather than patching an installed copy that an upstream update may overwrite.
-
-- Change colors, base typography or element defaults in `scripts/design_css.py`.
-- Change layout guidance in this `SKILL.md`.
-- To replace a font, update its `.woff2.b64` asset, checksum metadata and OFL-compatible license text together.
-- Keep fonts embedded. Do not replace them with Google Fonts, CDN or other runtime URLs.
-
-The skill instructions and helper are MIT-licensed. Cormorant Garamond and Newsreader retain their bundled SIL Open Font License terms.
-
-## Completion checklist
-
-- [ ] HTML is the better medium for this answer
-- [ ] conclusion and reader takeaway are clear
-- [ ] claims and citations are grounded
-- [ ] canonical design CSS is embedded before page-specific CSS
-- [ ] file is self-contained and responsive
-- [ ] publication is authorized
-- [ ] new page uses `publish`; canonical correction uses `update`
-- [ ] returned message leads with the Pagex URL when publication succeeds
+Publishing is an external side effect. With authorization, run `pagex publish /path/to/answer.html` and return its URL first. Use `pagex update <id> /path/to/revised.html` only for a correction to the same canonical page. Do not change Cloudflare resources, Access policy or public visibility without explicit approval.
