@@ -793,31 +793,12 @@ class PublisherTests(unittest.TestCase):
             self.assertEqual(len(versions), 1)
             self.assertEqual(versions[0].read_bytes(), old.read_bytes())
 
-    def test_update_accepts_page_ids_from_earlier_releases(self):
-        for page_id in ("4k7m9q2x", "abcdefghjk", "a" * 26):
-            with self.subTest(page_id=page_id), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                old = root / "old.html"
-                new = root / "new.html"
-                self.html(old, "old")
-                self.html(new, "new")
-                local = root / f"data/pages/{page_id}.html"
-                local.parent.mkdir(parents=True)
-                local.write_bytes(old.read_bytes())
-                fake = FakeR2()
-
-                result = self.make_publisher(root, fake).update(page_id, new)
-
-                self.assertEqual(result.page_id, page_id)
-                self.assertEqual(local.read_bytes(), new.read_bytes())
-                self.assertEqual(fake.objects[f"pagex/{page_id}"], new.read_bytes())
-
-    def test_update_rejects_invalid_page_ids(self):
+    def test_update_rejects_noncurrent_page_ids(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "new.html"
             self.html(source, "new")
             publisher = self.make_publisher(Path(directory), FakeR2())
-            for page_id in ("01234567", "abcdefghij", "abcdefghijklmnopqrstuvwxyz"):
+            for page_id in ("23456789", "abcdefghij", "abcdefghijklmnopqrstuvwxyz"):
                 with self.subTest(page_id=page_id), self.assertRaisesRegex(
                     pagex.PublishFailed, "invalid page ID"
                 ):

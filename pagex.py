@@ -27,9 +27,6 @@ MAX_PAGE_BYTES = 2 * 1024 * 1024
 PAGE_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 PAGE_ID_LENGTH = 8
 PAGE_ID_PATTERN = re.compile(f"[{re.escape(PAGE_ID_ALPHABET)}]+")
-LEGACY_PAGE_ID_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
-LEGACY_PAGE_ID_LENGTHS = {8, 10, 26}
-LEGACY_PAGE_ID_PATTERN = re.compile(f"[{re.escape(LEGACY_PAGE_ID_ALPHABET)}]+")
 R2_BUCKET_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])")
 HOST_LABEL_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 CONFIG_KEYS = {"base_url", "bucket", "data_dir", "wrangler"}
@@ -645,9 +642,7 @@ class PagexPublisher:
             return self._result(page_id, local_path)
 
     def update(self, page_id: str, source: Path) -> PublishResult:
-        current_id = len(page_id) == PAGE_ID_LENGTH and PAGE_ID_PATTERN.fullmatch(page_id)
-        legacy_id = len(page_id) in LEGACY_PAGE_ID_LENGTHS and LEGACY_PAGE_ID_PATTERN.fullmatch(page_id)
-        if not current_id and not legacy_id:
+        if len(page_id) != PAGE_ID_LENGTH or not PAGE_ID_PATTERN.fullmatch(page_id):
             raise PublishFailed("invalid page ID")
         data = _read_page(source)
         inspect_html(data)
